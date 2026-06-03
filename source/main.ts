@@ -6,6 +6,22 @@ import { ToolManager } from './tools/tool-manager';
 let mcpServer: MCPServer | null = null;
 let toolManager: ToolManager;
 
+function mergeSettings(partial: Partial<MCPServerSettings>): MCPServerSettings {
+    return { ...readSettings(), ...partial };
+}
+
+async function applyServerSettings(settings: MCPServerSettings, restart: boolean): Promise<void> {
+    const wasRunning = mcpServer?.getStatus().running ?? false;
+    if (mcpServer) {
+        mcpServer.stop();
+    }
+    mcpServer = new MCPServer(settings);
+    mcpServer.updateEnabledTools(toolManager.getEnabledTools());
+    if (restart && wasRunning) {
+        await mcpServer.start();
+    }
+}
+
 export const methods: { [key: string]: (...any: any) => any } = {
     openPanel() {
         Editor.Panel.open('cocos-mcp-server');
@@ -34,13 +50,25 @@ export const methods: { [key: string]: (...any: any) => any } = {
         return { ...status, settings };
     },
 
-    updateSettings(settings: MCPServerSettings) {
-        saveSettings(settings);
+    /** 仅保存设置；若服务器已在运行则按新配置重启，否则不强行启动 */
+    async persistSettings(partial: Partial<MCPServerSettings>) {
+        const merged = mergeSettings(partial);
+        saveSettings(merged);
+        await applyServerSettings(merged, true);
+        return merged;
+    },
+
+    /** 保存并启动服务器（用于「启动服务器」按钮） */
+    async updateSettings(partial: Partial<MCPServerSettings>) {
+        const merged = mergeSettings(partial);
+        saveSettings(merged);
         if (mcpServer) {
             mcpServer.stop();
         }
-        mcpServer = new MCPServer(settings);
-        mcpServer.start();
+        mcpServer = new MCPServer(merged);
+        mcpServer.updateEnabledTools(toolManager.getEnabledTools());
+        await mcpServer.start();
+        return merged;
     },
 
     getToolsList() {
@@ -165,10 +193,30 @@ export function load() {
     mcpServer.updateEnabledTools(toolManager.getEnabledTools());
 
     if (settings.autoStart) {
-        mcpServer.start().catch(err => {
-            console.error('[MCP] Auto-start failed:', err);
-        });
+        scheduleAutoStart();
     }
+}
+
+/** Creator 刚启动时编辑器/项目可能尚未就绪，延迟并重试自动启动 */
+function scheduleAutoStart(maxAttempts = 5, delayMs = 2000) {
+    let attempt = 0;
+    const tryStart = () => {
+        attempt += 1;
+        if (!mcpServer) {
+            return;
+        }
+        mcpServer.start()
+            .then(() => {
+                console.log(`[MCP] Auto-start succeeded (attempt ${attempt})`);
+            })
+            .catch(err => {
+                console.error(`[MCP] Auto-start attempt ${attempt}/${maxAttempts} failed:`, err);
+                if (attempt < maxAttempts) {
+                    setTimeout(tryStart, delayMs);
+                }
+            });
+    };
+    setTimeout(tryStart, delayMs);
 }
 
 export function unload() {

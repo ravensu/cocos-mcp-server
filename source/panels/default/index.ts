@@ -95,14 +95,7 @@ module.exports = Editor.Panel.define({
                         if (serverRunning.value) {
                             await Editor.Message.request('cocos-mcp-server', 'stop-server');
                         } else {
-                            const currentSettings = {
-                                port: settings.value.port,
-                                autoStart: settings.value.autoStart,
-                                enableDebugLog: settings.value.debugLog,
-                                maxConnections: settings.value.maxConnections
-                            };
-                            await Editor.Message.request('cocos-mcp-server', 'update-settings', currentSettings);
-                            await Editor.Message.request('cocos-mcp-server', 'start-server');
+                            await Editor.Message.request('cocos-mcp-server', 'update-settings', buildSettingsPayload());
                         }
                     } catch (error) {
                         console.error('[MCP Panel] Failed to toggle server:', error);
@@ -111,14 +104,8 @@ module.exports = Editor.Panel.define({
 
                 const saveSettings = async () => {
                     try {
-                        const settingsData = {
-                            port: settings.value.port,
-                            autoStart: settings.value.autoStart,
-                            enableDebugLog: settings.value.debugLog,
-                            maxConnections: settings.value.maxConnections
-                        };
-                        await Editor.Message.request('cocos-mcp-server', 'update-settings', settingsData);
-                        settingsChanged.value = false;
+                        await Editor.Message.request('cocos-mcp-server', 'persist-settings', buildSettingsPayload());
+                        await syncSettingsFromServer();
                     } catch (error) {
                         console.error('[MCP Panel] Failed to save settings:', error);
                     }
@@ -207,21 +194,44 @@ module.exports = Editor.Panel.define({
                     return CATEGORY_DISPLAY_NAMES[category] ?? category;
                 };
 
+                const buildSettingsPayload = () => ({
+                    port: Number(settings.value.port) || 3000,
+                    autoStart: Boolean(settings.value.autoStart),
+                    enableDebugLog: Boolean(settings.value.debugLog),
+                    maxConnections: Number(settings.value.maxConnections) || 10,
+                });
+
+                const syncSettingsFromServer = async () => {
+                    const status = await Editor.Message.request('cocos-mcp-server', 'get-server-status');
+                    if (!status?.settings) {
+                        return;
+                    }
+                    settings.value = {
+                        port: status.settings.port ?? 3000,
+                        autoStart: Boolean(status.settings.autoStart),
+                        debugLog: Boolean(status.settings.enableDebugLog),
+                        maxConnections: status.settings.maxConnections ?? 10,
+                    };
+                    settingsChanged.value = false;
+                };
+
+                const onAutoStartChange = (event: Event) => {
+                    const target = event.target as HTMLInputElement;
+                    settings.value.autoStart = target.checked;
+                };
+
+                const onDebugLogChange = (event: Event) => {
+                    const target = event.target as HTMLInputElement;
+                    settings.value.debugLog = target.checked;
+                };
+
                 watch(settings, () => { settingsChanged.value = true; }, { deep: true });
 
                 onMounted(async () => {
                     await loadToolManagerState();
 
                     try {
-                        const status = await Editor.Message.request('cocos-mcp-server', 'get-server-status');
-                        if (status?.settings) {
-                            settings.value = {
-                                port: status.settings.port ?? 3000,
-                                autoStart: status.settings.autoStart ?? false,
-                                debugLog: status.settings.enableDebugLog ?? false,
-                                maxConnections: status.settings.maxConnections ?? 10
-                            };
-                        }
+                        await syncSettingsFromServer();
                     } catch (error) {
                         console.error('[MCP Panel] Failed to load server settings:', error);
                     }
@@ -261,6 +271,8 @@ module.exports = Editor.Panel.define({
                     toggleServer,
                     saveSettings,
                     copyUrl,
+                    onAutoStartChange,
+                    onDebugLogChange,
                     loadToolManagerState,
                     updateToolStatus,
                     selectAllTools,

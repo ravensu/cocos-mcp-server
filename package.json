@@ -60,6 +60,9 @@
             "update-settings": {
                 "methods": ["updateSettings"]
             },
+            "persist-settings": {
+                "methods": ["persistSettings"]
+            },
             "getToolsList": {
                 "methods": ["getToolsList"]
             },
