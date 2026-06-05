@@ -1,0 +1,87 @@
+# 将上游仓库的 main 合并到本 fork 的 main，便于跟进源项目更新。
+# 在仓库 Settings → Actions → General 中确保 Workflow 有读写权限（Read and write permissions）。
+# 若合并冲突，本 workflow 会失败，需在本地 fetch upstream 后手动解决再 push。
+name: Sync upstream
+
+on:
+  schedule:
+    # 每天 UTC 02:00（北京时间 10:00）
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_repository:
+        description: "上游仓库 owner/name"
+        required: false
+        default: "DaxianLee/cocos-mcp-server"
+      upstream_branch:
+        description: "上游分支"
+        required: false
+        default: "main"
+      target_branch:
+        description: "本仓库要更新的分支"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_branch || 'main' }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve sync parameters
+        id: params
+        run: |
+          echo "upstream_repo=${{ github.event.inputs.upstream_repository || 'DaxianLee/cocos-mcp-server' }}" >> "$GITHUB_OUTPUT"
+          echo "upstream_branch=${{ github.event.inputs.upstream_branch || 'main' }}" >> "$GITHUB_OUTPUT"
+          echo "target_branch=${{ github.event.inputs.target_branch || 'main' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge upstream
+        id: merge
+        env:
+          UPSTREAM_REPO: ${{ steps.params.outputs.upstream_repo }}
+          UPSTREAM_BRANCH: ${{ steps.params.outputs.upstream_branch }}
+        run: |
+          set -euo pipefail
+          before_head="$(git rev-parse HEAD)"
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+          if git merge "upstream/${UPSTREAM_BRANCH}" \
+            -m "chore(sync): merge ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}"; then
+            after_head="$(git rev-parse HEAD)"
+            if [ "${before_head}" = "${after_head}" ]; then
+              echo "No changes to push (already up to date)."
+              echo "updated=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Merged upstream changes."
+              echo "updated=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "::error::与上游合并发生冲突，请在本地解决后 push。"
+            git merge --abort 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Push to origin
+        if: steps.merge.outputs.updated == 'true'
+        env:
+          TARGET_BRANCH: ${{ steps.params.outputs.target_branch }}
+        run: git push origin "HEAD:${TARGET_BRANCH}"
