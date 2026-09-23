@@ -178,9 +178,9 @@ export class NodeTools implements ToolExecutor {
                             properties: {
                                 x: { type: 'number' },
                                 y: { type: 'number' },
-                                z: { type: 'number', description: 'Z coordinate (ignored for 2D nodes)' }
+                                z: { type: 'number', description: 'Z coordinate; omitted axes preserve current values' }
                             },
-                            description: 'Node position. For 2D nodes, only x,y are used; z is ignored. For 3D nodes, all coordinates are used.'
+                            description: 'Local node position. Partial updates preserve unspecified axes for both 2D and 3D nodes.'
                         },
                         rotation: {
                             type: 'object',
@@ -395,18 +395,8 @@ export class NodeTools implements ToolExecutor {
                 const nodeUuid = await Editor.Message.request('scene', 'create-node', createNodeOptions);
                 const uuid = Array.isArray(nodeUuid) ? nodeUuid[0] : nodeUuid;
 
-                // Handle sibling index positioning
-                if (args.siblingIndex !== undefined && args.siblingIndex >= 0 && uuid && targetParentUuid) {
-                    try {
-                        await new Promise(resolve => setTimeout(resolve, 100)); // Wait for internal state to settle
-                        await Editor.Message.request('scene', 'set-parent', {
-                            parent: targetParentUuid,
-                            uuids: [uuid],
-                            keepWorldTransform: args.keepWorldTransform || false
-                        });
-                    } catch (err) {
-                        console.warn('Failed to set sibling index:', err);
-                    }
+                if (args.siblingIndex !== undefined && args.siblingIndex >= 0 && uuid) {
+                    await this.reorderNodeVerified(uuid, args.siblingIndex);
                 }
 
                 // Add components if specified
@@ -519,7 +509,7 @@ export class NodeTools implements ToolExecutor {
                     parent: nodeData.parent?.value?.uuid || null,
                     children: nodeData.children || [],
                     components: (nodeData.__comps__ || []).map((comp: any) => ({
-                        type: comp.__type__ || 'Unknown',
+                        type: comp.__type__ || comp.cid || comp.type || 'Unknown',
                         enabled: comp.enabled !== undefined ? comp.enabled : true
                     })),
                     layer: nodeData.layer?.value || 1073741824,
@@ -765,7 +755,9 @@ export class NodeTools implements ToolExecutor {
                 const is2DNode = this.is2DNode(nodeInfo);
                 
                 if (position) {
-                    const normalizedPosition = this.normalizeTransformValue(position, 'position', is2DNode);
+                    const merged = { ...nodeInfo.position, ...position };
+                    if (!['x', 'y', 'z'].every(axis => Number.isFinite(merged[axis]))) throw new Error('Position requires finite x/y/z after merging current coordinates');
+                    const normalizedPosition = { value: merged, warning: undefined as string | undefined };
                     if (normalizedPosition.warning) {
                         warnings.push(normalizedPosition.warning);
                     }
@@ -821,6 +813,15 @@ export class NodeTools implements ToolExecutor {
                 
                 // Verify the changes by getting updated node info
                 const updatedNodeInfo = await this.getNodeInfo(uuid);
+                if (!updatedNodeInfo.success || !updatedNodeInfo.data)
+                    throw new Error('Transform was written but readback failed');
+                if (position) {
+                    const expected = { ...nodeInfo.position, ...position };
+                    if (!['x', 'y', 'z'].every(axis =>
+                        Number.isFinite(updatedNodeInfo.data.position?.[axis]) &&
+                        Math.abs(updatedNodeInfo.data.position[axis] - expected[axis]) <= 0.00001))
+                        throw new Error('Position was written but readback does not match');
+                }
                 const response: any = {
                     success: true,
                     message: `Transform properties updated: ${updates.join(', ')} ${is2DNode ? '(2D node)' : '(3D node)'}`,
@@ -830,7 +831,7 @@ export class NodeTools implements ToolExecutor {
                         nodeType: is2DNode ? '2D' : '3D',
                         appliedChanges: updates,
                         transformConstraints: {
-                            position: is2DNode ? 'x, y only (z ignored)' : 'x, y, z all used',
+                            position: 'x, y, z preserved unless explicitly changed',
                             rotation: is2DNode ? 'z only (x, y ignored)' : 'x, y, z all used',
                             scale: is2DNode ? 'x, y main, z typically 1' : 'x, y, z all used'
                         }
@@ -968,6 +969,18 @@ export class NodeTools implements ToolExecutor {
         });
     }
 
+    private async reorderNodeVerified(uuid: string, index: number): Promise<void> {
+        if (!Number.isInteger(index) || index < 0) throw new Error('siblingIndex must be a nonnegative integer');
+        const undo = await Editor.Message.request('scene', 'begin-recording', uuid);
+        try {
+            const result: any = await Editor.Message.request('scene', 'execute-scene-script', {
+                name: 'cocos-mcp-server', method: 'reorderNode', args: [uuid, index]
+            });
+            if (!result?.success || result.data?.siblingIndex !== index)
+                throw new Error(result?.error || 'Sibling order verification failed');
+        } finally { await Editor.Message.request('scene', 'end-recording', undo); }
+    }
+
     private async moveNode(nodeUuid: string, newParentUuid: string, siblingIndex: number = -1): Promise<ToolResponse> {
         return new Promise((resolve) => {
             // Use correct set-parent API instead of move-node
@@ -975,7 +988,8 @@ export class NodeTools implements ToolExecutor {
                 parent: newParentUuid,
                 uuids: [nodeUuid],
                 keepWorldTransform: false
-            }).then(() => {
+            }).then(async () => {
+                if (siblingIndex >= 0) await this.reorderNodeVerified(nodeUuid, siblingIndex);
                 resolve({
                     success: true,
                     message: 'Node moved successfully'

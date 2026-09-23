@@ -34,7 +34,7 @@ export class DebugTools implements ToolExecutor {
             },
             {
                 name: 'execute_script',
-                description: 'Execute JavaScript in scene context',
+                description: 'Execute JavaScript using eval completion values in scene context. cc is the active scene engine. Use (() => { return value; })() for multi-statement queries; top-level return is not supported.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -192,37 +192,44 @@ export class DebugTools implements ToolExecutor {
     private async executeScript(script: string): Promise<ToolResponse> {
         try {
             const result = await Editor.Message.request('scene', 'execute-scene-script', {
-                name: 'console',
-                method: 'eval',
+                name: 'cocos-mcp-server',
+                method: 'executeScript',
                 args: [script]
             });
-            return { success: true, data: { result, message: 'Script executed successfully' } };
+            if (!result?.success) return { success: false, error: result?.error || 'No script result' };
+            return { success: true, data: { result: result.data, message: 'Script executed successfully' } };
         } catch (err: any) {
             return { success: false, error: err.message };
         }
     }
 
     private async getNodeTree(rootUuid?: string, maxDepth: number = 10): Promise<ToolResponse> {
+        const value = (dump: any) => dump?.value ?? dump;
         const buildTree = async (nodeUuid: string, depth: number = 0): Promise<any> => {
-            if (depth >= maxDepth) return { truncated: true };
+            if (depth >= maxDepth) return { uuid: nodeUuid, truncated: true };
             try {
-                const nodeData = await Editor.Message.request('scene', 'query-node', nodeUuid);
+                const nodeData: any = await Editor.Message.request('scene', 'query-node', nodeUuid);
+                if (!nodeData) throw new Error(`Node ${nodeUuid} not found`);
+                const children = value(nodeData.children) || [];
                 const tree: any = {
-                    uuid: nodeData.uuid,
-                    name: nodeData.name,
-                    active: nodeData.active,
-                    components: (nodeData as any).components?.map((c: any) => c.__type__) ?? [],
-                    childCount: nodeData.children?.length ?? 0,
+                    uuid: value(nodeData.uuid),
+                    name: value(nodeData.name),
+                    active: value(nodeData.active),
+                    components: (nodeData.__comps__ || nodeData.components || []).map((c: any) => c.__type__ || c.cid || c.type),
+                    childCount: children.length,
                     children: []
                 };
-                if (nodeData.children?.length) {
-                    for (const childId of nodeData.children) {
+                if (children.length) {
+                    for (const child of children) {
+                        const reference = value(child);
+                        const childId = value(reference?.uuid) || reference;
+                        if (typeof childId !== 'string') throw new Error('Child UUID missing in node dump');
                         tree.children.push(await buildTree(childId, depth + 1));
                     }
                 }
                 return tree;
             } catch (err: any) {
-                return { error: err.message };
+                throw new Error(`Node ${nodeUuid}: ${err.message}`);
             }
         };
 
@@ -230,7 +237,7 @@ export class DebugTools implements ToolExecutor {
             if (rootUuid) {
                 return { success: true, data: await buildTree(rootUuid) };
             }
-            const hierarchy: any = await Editor.Message.request('scene', 'query-hierarchy');
+            const hierarchy: any = await Editor.Message.request('scene', 'query-node-tree');
             const trees = await Promise.all(hierarchy.children.map((n: any) => buildTree(n.uuid)));
             return { success: true, data: trees };
         } catch (err: any) {

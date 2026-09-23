@@ -14,6 +14,7 @@ import { SceneAdvancedTools } from './tools/scene-advanced-tools';
 import { SceneViewTools } from './tools/scene-view-tools';
 import { ReferenceImageTools } from './tools/reference-image-tools';
 import { AssetAdvancedTools } from './tools/asset-advanced-tools';
+import { AnimationTools } from './tools/animation-tools';
 import { ValidationTools } from './tools/validation-tools';
 
 export class MCPServer {
@@ -44,6 +45,7 @@ export class MCPServer {
             this.tools.referenceImage = new ReferenceImageTools();
             this.tools.assetAdvanced = new AssetAdvancedTools();
             this.tools.validation = new ValidationTools();
+            this.tools.animation = new AnimationTools();
         } catch (error) {
             console.error('[MCPServer] Failed to initialize tools:', error);
             throw error;

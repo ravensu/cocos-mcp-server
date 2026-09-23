@@ -572,20 +572,12 @@ export class SceneAdvancedTools implements ToolExecutor {
     }
 
     private async executeSceneScript(name: string, method: string, args: any[] = []): Promise<ToolResponse> {
-        return new Promise((resolve) => {
-            Editor.Message.request('scene', 'execute-scene-script', {
-                name,
-                method,
-                args
-            }).then((result: any) => {
-                resolve({
-                    success: true,
-                    data: result
-                });
-            }).catch((err: Error) => {
-                resolve({ success: false, error: err.message });
-            });
-        });
+        try {
+            const result: any = await Editor.Message.request('scene', 'execute-scene-script', { name, method, args });
+            if (result === undefined) return { success: false, error: 'Scene method returned no result; execution cannot be verified' };
+            if (result?.success === false) return { success: false, error: result.error || 'Scene method failed', data: result };
+            return { success: true, data: result };
+        } catch (error: any) { return { success: false, error: error.message }; }
     }
 
     private async sceneSnapshot(): Promise<ToolResponse> {

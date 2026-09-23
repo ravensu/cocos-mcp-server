@@ -267,7 +267,7 @@ export class PrefabTools implements ToolExecutor {
 
                 // Use the correct create-node API to instantiate from prefab asset
                 const createNodeOptions: any = {
-                    assetUuid: assetInfo.uuid
+                    assetUuid: assetInfo.uuid, type: "cc.Prefab", unlinkPrefab: false, snapshot: true
                 };
 
                 // Set parent node
@@ -284,18 +284,18 @@ export class PrefabTools implements ToolExecutor {
 
                 // Set initial properties (e.g. position)
                 if (args.position) {
-                    createNodeOptions.dump = {
-                        position: {
-                            value: args.position
-                        }
-                    };
+                    createNodeOptions.position = args.position;
                 }
 
                 // Create the node
                 const nodeUuid = await Editor.Message.request('scene', 'create-node', createNodeOptions);
                 const uuid = Array.isArray(nodeUuid) ? nodeUuid[0] : nodeUuid;
 
-                // Note: create-node API should automatically establish prefab linkage when created from a prefab asset
+                const verification: any = await Editor.Message.request('scene', 'execute-scene-script', {
+                    name: 'cocos-mcp-server', method: 'verifyPrefabLink', args: [uuid, assetInfo.uuid]
+                });
+                if (!verification?.success) throw new Error('Created node ' + uuid + ' but prefab link verification failed: ' + (verification?.error || 'No result'));
+                // Link checked against the live engine node.
                 console.log('Prefab node created successfully:', {
                     nodeUuid: uuid,
                     prefabUuid: assetInfo.uuid,

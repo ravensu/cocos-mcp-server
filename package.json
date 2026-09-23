@@ -113,7 +113,14 @@
                 "setComponentProperty",
                 "getCurrentSceneInfo",
                 "getSceneHierarchy",
-                "createPrefabFromNode"
+                "createPrefabFromNode",
+                "probePrefabUtils", "verifyPrefabLink", "executeScript",
+                "linkPrefabInstance",
+                "addAnimationClip",
+                "setLabelFont",
+                "setComponentProp",
+                "reorderNode",
+                "getAnimationClips", "buildAnimationClip", "verifyAnimationClip"
             ]
         }
     }

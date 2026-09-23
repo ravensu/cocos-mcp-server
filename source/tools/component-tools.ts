@@ -289,20 +289,19 @@ export class ComponentTools implements ToolExecutor {
                 return;
             }
             // Step 2: Find component whose type field matches componentType (cid)
-            const exists = allComponentsInfo.data.components.some((comp: any) => comp.type === componentType);
+            const selected = allComponentsInfo.data.components.find((comp: any) => comp.type === componentType);
+            const exists = !!selected?.uuid;
             if (!exists) {
                 resolve({ success: false, error: `Component cid '${componentType}' not found on node '${nodeUuid}'. Use getComponents to get the type field (cid) as componentType.` });
                 return;
             }
             // Step 3: Remove via official API
             try {
-                await Editor.Message.request('scene', 'remove-component', {
-                    uuid: nodeUuid,
-                    component: componentType
-                });
+                await Editor.Message.request('scene', 'remove-component', { uuid: selected.uuid });
                 // Step 4: Re-query to confirm removal
                 const afterRemoveInfo = await this.getComponents(nodeUuid);
-                const stillExists = afterRemoveInfo.success && afterRemoveInfo.data?.components?.some((comp: any) => comp.type === componentType);
+                if (!afterRemoveInfo.success || !afterRemoveInfo.data?.components) throw new Error('Removal readback failed');
+                const stillExists = afterRemoveInfo.data.components.some((comp: any) => comp.uuid === selected.uuid);
                 if (stillExists) {
                     resolve({ success: false, error: `Component cid '${componentType}' was not removed from node '${nodeUuid}'.` });
                 } else {
@@ -325,7 +324,7 @@ export class ComponentTools implements ToolExecutor {
                 if (nodeData && nodeData.__comps__) {
                     const components = nodeData.__comps__.map((comp: any) => ({
                         type: comp.__type__ || comp.cid || comp.type || 'Unknown',
-                        uuid: comp.uuid?.value || comp.uuid || null,
+                        uuid: comp.uuid?.value || comp.uuid || comp.value?.uuid?.value || comp.value?.uuid || null,
                         enabled: comp.enabled !== undefined ? comp.enabled : true,
                         properties: this.extractComponentProperties(comp)
                     }));
@@ -500,7 +499,8 @@ export class ComponentTools implements ToolExecutor {
     }
 
     private async setComponentProperty(args: any): Promise<ToolResponse> {
-                        const { nodeUuid, componentType, property, propertyType, value } = args;
+        const { nodeUuid, property, propertyType, value } = args;
+        let componentType = args.componentType;
         
         return new Promise(async (resolve) => {
             try {
@@ -525,6 +525,26 @@ export class ComponentTools implements ToolExecutor {
                 }
                 
                 const allComponents = componentsResponse.data.components;
+
+                // Editor dumps use compressed class IDs for custom scripts.
+                // Resolve a human class name against components on this node only.
+                if (!allComponents.some((comp: any) => comp.type === componentType)) {
+                    const resolved = await Editor.Message.request('scene', 'execute-scene-script', {
+                        name: 'cocos-mcp-server', method: 'executeScript',
+                        args: [`(() => {
+                            const cc = require('cc');
+                            const find = n => n && (n.uuid === ${JSON.stringify(nodeUuid)} ? n : (n.children || []).map(find).find(Boolean));
+                            const node = find(cc.director.getScene());
+                            if (!node) throw new Error('Node not found');
+                            const matches = node.components.filter(c => cc.js.getClassName(c) === ${JSON.stringify(componentType)});
+                            const ids = [...new Set(matches.map(c => cc.js.getClassId(c)))];
+                            if (ids.length > 1) throw new Error('Ambiguous component class name; use class ID');
+                            return ids[0] || null;
+                        })()`]
+                    });
+                    if (!resolved?.success) throw new Error(resolved?.error || 'Component class resolution failed');
+                    if (typeof resolved.data === 'string') componentType = resolved.data;
+                }
                 
                 // Step 2: Find target component
                 let targetComponent = null;
@@ -802,8 +822,8 @@ export class ComponentTools implements ToolExecutor {
                     });
                 } else if (componentType === 'cc.UITransform' && (property === '_anchorPoint' || property === 'anchorPoint')) {
                     // Special handling for UITransform anchorPoint - set anchorX and anchorY separately
-                    const anchorX = Number(value.x) || 0.5;
-                    const anchorY = Number(value.y) || 0.5;
+                    const anchorX = value.x !== undefined && value.x !== null ? Number(value.x) : 0.5;
+                    const anchorY = value.y !== undefined && value.y !== null ? Number(value.y) : 0.5;
                     
                     // Set anchorX first
                     await Editor.Message.request('scene', 'set-property', {

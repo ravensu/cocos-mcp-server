@@ -14,6 +14,7 @@ import { SceneAdvancedTools } from './scene-advanced-tools';
 import { SceneViewTools } from './scene-view-tools';
 import { ReferenceImageTools } from './reference-image-tools';
 import { AssetAdvancedTools } from './asset-advanced-tools';
+import { AnimationTools } from './animation-tools';
 import { ValidationTools } from './validation-tools';
 
 // All tool category instances are shared with MCPServer to avoid double instantiation.
@@ -33,7 +34,7 @@ function createToolInstances(): Record<string, any> {
         sceneView: new SceneViewTools(),
         referenceImage: new ReferenceImageTools(),
         assetAdvanced: new AssetAdvancedTools(),
-        validation: new ValidationTools()
+        validation: new ValidationTools(), animation: new AnimationTools()
     };
 }
 
@@ -48,6 +49,18 @@ export class ToolManager {
         if (this.settings.configurations.length === 0) {
             this.createConfiguration('Default', 'Auto-created default tool configuration');
         }
+        // New tools must also appear in previously saved configurations.
+        let changed = false;
+        for (const config of this.settings.configurations) {
+            const known = new Set(config.tools.map(t => `${t.category}_${t.name}`));
+            for (const tool of this.availableTools) {
+                if (!known.has(`${tool.category}_${tool.name}`)) {
+                    config.tools.push({ ...tool });
+                    changed = true;
+                }
+            }
+        }
+        if (changed) this.saveSettings();
     }
 
     private discoverTools(): ToolConfig[] {

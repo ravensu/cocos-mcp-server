@@ -192,7 +192,9 @@ export function load() {
     mcpServer = new MCPServer(settings);
     mcpServer.updateEnabledTools(toolManager.getEnabledTools());
 
-    if (settings.autoStart) {
+    // 构建实例(--build)不自动启动 MCP，避免与主编辑器抢 3000 端口导致构建卡死；主编辑器 MCP 保持常开
+    const isBuildInstance = process.argv.includes('--build');
+    if (settings.autoStart && !isBuildInstance) {
         scheduleAutoStart();
     }
 }
